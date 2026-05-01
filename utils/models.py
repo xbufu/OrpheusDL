@@ -36,6 +36,7 @@ class CodecEnum(Flag):
     FLAC = auto()  # Lossless, free
     ALAC = auto()  # Lossless, free, useless
     WAV = auto()  # Lossless (uncompressed), free, useless
+    AIFF = auto()  # Lossless, free, uncompressed
     MQA = auto()  # Lossy, proprietary, terrible
     OPUS = auto()  # Lossy, free
     VORBIS = auto()  # Lossy, free
@@ -53,6 +54,7 @@ class CodecEnum(Flag):
 class ContainerEnum(Flag):
     flac = auto()
     wav = auto()
+    aiff = auto()
     opus = auto()
     ogg = auto()
     m4a = auto()
@@ -84,6 +86,7 @@ codec_data = {
     CodecEnum.FLAC:   CodecData(pretty_name='FLAC',             container=ContainerEnum.flac, lossless=True,  spatial=False, proprietary=False),
     CodecEnum.ALAC:   CodecData(pretty_name='ALAC',             container=ContainerEnum.m4a,  lossless=True,  spatial=False, proprietary=False),
     CodecEnum.WAV:    CodecData(pretty_name='WAVE',             container=ContainerEnum.wav,  lossless=True,  spatial=False, proprietary=False),
+    CodecEnum.AIFF:   CodecData(pretty_name='AIFF',             container=ContainerEnum.aiff, lossless=True,  spatial=False, proprietary=False),
     CodecEnum.MQA:    CodecData(pretty_name='MQA',              container=ContainerEnum.flac, lossless=False, spatial=False, proprietary=True),
     CodecEnum.OPUS:   CodecData(pretty_name='Opus',             container=ContainerEnum.opus, lossless=False, spatial=False, proprietary=False),
     CodecEnum.VORBIS: CodecData(pretty_name='Vorbis',           container=ContainerEnum.ogg,  lossless=False, spatial=False, proprietary=False),
