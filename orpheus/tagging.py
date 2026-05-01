@@ -3,6 +3,7 @@ import logging
 from dataclasses import asdict
 
 from PIL import Image
+from mutagen.aiff import AIFF as _AIFFBase
 from mutagen.easyid3 import EasyID3
 from mutagen.easymp4 import EasyMP4
 from mutagen.flac import FLAC, Picture
@@ -18,6 +19,43 @@ from utils.models import ContainerEnum, TrackInfo
 
 # Needed for Windows tagging support
 MP4Tags._padding = 0
+
+
+class EasyAIFF(_AIFFBase):
+    """AIFF with EasyID3-style dictionary access.
+
+    Wraps the _IFFID3 tag storage with an EasyID3 key-mapping layer so that
+    the same easy key names used for EasyMP3 (title, album, artist, …) work
+    transparently while saving via the native AIFF/IFF chunk mechanism.
+    """
+
+    def _init_easy(self):
+        if self.tags is not None:
+            easy = EasyID3.__new__(EasyID3)
+            easy._EasyID3__id3 = self.tags
+            self._easy = easy
+        else:
+            self._easy = None
+
+    def __init__(self, filename=None, **kwargs):
+        super().__init__(filename, **kwargs)
+        self._init_easy()
+
+    def add_tags(self):
+        super().add_tags()
+        self._init_easy()
+
+    def __setitem__(self, key, value):
+        self._easy[key] = value
+
+    def __getitem__(self, key):
+        return self._easy[key]
+
+    def __delitem__(self, key):
+        del self._easy[key]
+
+    def __contains__(self, key):
+        return self._easy is not None and key in self._easy
 
 
 def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_list: list, embedded_lyrics: str, container: ContainerEnum):
@@ -42,6 +80,21 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
         tagger.tags.RegisterTXXXKey('upc', 'BARCODE')
 
         tagger.tags.pop('encoded', None)
+    elif container == ContainerEnum.aiff:
+        tagger = EasyAIFF(file_path)
+
+        if tagger.tags is None:
+            tagger.add_tags()
+
+        # Register same custom keys as MP3 (class-level, affects all EasyID3 instances)
+        EasyID3.RegisterTextKey('encoded', 'TSSE')
+        EasyID3.RegisterTXXXKey('compatible_brands', 'compatible_brands')
+        EasyID3.RegisterTXXXKey('major_brand', 'major_brand')
+        EasyID3.RegisterTXXXKey('minor_version', 'minor_version')
+        EasyID3.RegisterTXXXKey('Rating', 'Rating')
+        EasyID3.RegisterTXXXKey('upc', 'BARCODE')
+
+        tagger._easy.pop('encoded', None)
     elif container == ContainerEnum.m4a:
         tagger = EasyMP4(file_path)
 
@@ -71,7 +124,7 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
 
     tagger['artist'] = track_info.artists
 
-    if container == ContainerEnum.m4a or container == ContainerEnum.mp3:
+    if container in {ContainerEnum.m4a, ContainerEnum.mp3, ContainerEnum.aiff}:
         if track_info.tags.track_number and track_info.tags.total_tracks:
             tagger['tracknumber'] = str(track_info.tags.track_number) + '/' + str(track_info.tags.total_tracks)
         elif track_info.tags.track_number:
@@ -87,12 +140,13 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
         if track_info.tags.total_discs: tagger['totaldiscs'] = str(track_info.tags.total_discs)
 
     if track_info.tags.release_date:
-        if container == ContainerEnum.mp3:
-            # Never access protected attributes, too bad! Only works on ID3v2.4, disabled for now!
-            # tagger.tags._EasyID3__id3._DictProxy__dict['TDRL'] = TDRL(encoding=3, text=track_info.tags.release_date)
+        if container in {ContainerEnum.mp3, ContainerEnum.aiff}:
             # Use YYYY-MM-DD for consistency and convert it to DDMM
             release_dd_mm = f'{track_info.tags.release_date[8:10]}{track_info.tags.release_date[5:7]}'
-            tagger.tags._EasyID3__id3._DictProxy__dict['TDAT'] = TDAT(encoding=3, text=release_dd_mm)
+            if container == ContainerEnum.mp3:
+                tagger.tags._EasyID3__id3._DictProxy__dict['TDAT'] = TDAT(encoding=3, text=release_dd_mm)
+            else:
+                tagger.tags['TDAT'] = TDAT(encoding=3, text=release_dd_mm)
             # Now add the year tag
             tagger['date'] = str(track_info.release_year)
         else:
@@ -123,6 +177,8 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
                 encoding=3,
                 text=track_info.tags.label
             )
+        elif container == ContainerEnum.aiff:
+            tagger.tags['TPUB'] = TPUB(encoding=3, text=track_info.tags.label)
         elif container == ContainerEnum.m4a:
             # only works with MP3TAG? https://docs.mp3tag.de/mapping/
             tagger.RegisterTextKey('label', '\xa9pub')
@@ -145,6 +201,8 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
                 desc=u'',
                 text=track_info.tags.description
             )
+        elif container == ContainerEnum.aiff:
+            tagger.tags['COMM'] = COMM(encoding=3, lang=u'eng', desc=u'', text=track_info.tags.description)
 
     # add all extra_kwargs key value pairs to the (FLAC, Vorbis) file
     if container in {ContainerEnum.flac, ContainerEnum.ogg}:
@@ -168,6 +226,10 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
                 # Create a new user-defined text frame key
                 tagger.tags.RegisterTXXXKey(credit.type.upper(), credit.type)
                 tagger[credit.type] = credit.names
+        elif container == ContainerEnum.aiff:
+            for credit in credits_list:
+                EasyID3.RegisterTXXXKey(credit.type.upper(), credit.type)
+                tagger[credit.type] = credit.names
         else:
             for credit in credits_list:
                 try:
@@ -183,6 +245,8 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
                 lang=u'eng',  # don't assume?
                 text=embedded_lyrics
             )
+        elif container == ContainerEnum.aiff:
+            tagger.tags['USLT'] = USLT(encoding=3, lang=u'eng', text=embedded_lyrics)
         else:
             tagger['lyrics'] = embedded_lyrics
 
@@ -214,6 +278,14 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
                     desc='Cover',  # name
                     data=data
                 )
+            elif container == ContainerEnum.aiff:
+                tagger.tags['APIC'] = APIC(
+                    encoding=3,
+                    mime='image/jpeg',
+                    type=3,
+                    desc='Cover',
+                    data=data
+                )
             # If you want to have a cover in only a few applications, then this technically works for Opus
             elif container in {ContainerEnum.ogg, ContainerEnum.opus}:
                 im = Image.open(image_path)
@@ -231,7 +303,12 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
                   f'will not have cover saved.')
 
     try:
-        tagger.save(file_path, v1=2, v2_version=3, v23_sep=None) if container == ContainerEnum.mp3 else tagger.save()
+        if container == ContainerEnum.mp3:
+            tagger.save(file_path, v1=2, v2_version=3, v23_sep=None)
+        elif container == ContainerEnum.aiff:
+            tagger.save(file_path)
+        else:
+            tagger.save()
     except:
         logging.debug('Tagging failed.')
         tag_text = '\n'.join((f'{k}: {v}' for k, v in asdict(track_info.tags).items() if v and k != 'credits' and k != 'lyrics'))
