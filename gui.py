@@ -1,0 +1,443 @@
+import customtkinter as ctk
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import tkinter
+import tkinter.filedialog
+
+SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "config", "settings.json")
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+QUALITY_OPTIONS = ["hifi", "lossless", "high", "medium", "low"]
+COMPRESSION_OPTIONS = ["high", "medium", "low"]
+M3U_PATH_OPTIONS = ["absolute", "relative"]
+EXTERNAL_FORMAT_OPTIONS = ["png", "jpg", "jpeg"]
+
+
+def load_settings():
+    with open(SETTINGS_PATH, "r") as f:
+        return json.load(f)
+
+
+def save_settings(data):
+    with open(SETTINGS_PATH, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+class App(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("OrpheusDL")
+        self.geometry("900x620")
+        self.minsize(700, 500)
+
+        self._download_process = None
+        self._output_queue = queue.Queue()
+
+        self._tabview = ctk.CTkTabview(self)
+        self._tabview.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self._tabview.add("Download")
+        self._tabview.add("Settings")
+
+        self._build_download_tab(self._tabview.tab("Download"))
+        self._build_settings_tab(self._tabview.tab("Settings"))
+
+    # ── Download Tab ──────────────────────────────────────────────────────────
+
+    def _build_download_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(4, weight=1)
+
+        # URL row
+        url_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        url_frame.grid(row=0, column=0, sticky="ew", pady=(6, 4))
+        url_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(url_frame, text="URL:", width=50, anchor="w").grid(row=0, column=0, padx=(0, 6))
+        self._url_entry = ctk.CTkEntry(url_frame, placeholder_text="Paste download URL here…")
+        self._url_entry.grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(url_frame, text="Clear", width=60, command=lambda: self._url_entry.delete(0, "end")).grid(row=0, column=2, padx=(6, 0))
+
+        # Output path row
+        out_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        out_frame.grid(row=1, column=0, sticky="ew", pady=4)
+        out_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(out_frame, text="Output:", width=50, anchor="w").grid(row=0, column=0, padx=(0, 6))
+        self._out_entry = ctk.CTkEntry(out_frame, placeholder_text="Override output path (optional)")
+        self._out_entry.grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(out_frame, text="Browse", width=60, command=self._browse_output).grid(row=0, column=2, padx=(6, 0))
+
+        # Action buttons + progress bar
+        action_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        action_frame.grid(row=2, column=0, sticky="ew", pady=4)
+        action_frame.grid_columnconfigure(1, weight=1)
+
+        self._download_btn = ctk.CTkButton(action_frame, text="Download", width=110, command=self._start_download)
+        self._download_btn.grid(row=0, column=0, padx=(0, 10))
+
+        self._progress = ctk.CTkProgressBar(action_frame, mode="indeterminate")
+        self._progress.grid(row=0, column=1, sticky="ew")
+
+        self._stop_btn = ctk.CTkButton(action_frame, text="Stop", width=80, fg_color="#c0392b", hover_color="#a93226", command=self._stop_download, state="disabled")
+        self._stop_btn.grid(row=0, column=2, padx=(10, 0))
+
+        # Log output
+        self._log = tkinter.Text(
+            parent,
+            bg="#1a1a2e",
+            fg="#e0e0e0",
+            insertbackground="#e0e0e0",
+            selectbackground="#3a3a5c",
+            relief="flat",
+            font=("Courier", 10),
+            wrap="word",
+            state="disabled",
+        )
+        self._log.grid(row=4, column=0, sticky="nsew", pady=(6, 0))
+
+        scrollbar = ctk.CTkScrollbar(parent, command=self._log.yview)
+        scrollbar.grid(row=4, column=1, sticky="ns", pady=(6, 0))
+        self._log.configure(yscrollcommand=scrollbar.set)
+
+        clear_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        clear_frame.grid(row=5, column=0, columnspan=2, sticky="e", pady=(4, 0))
+        ctk.CTkButton(clear_frame, text="Clear Output", width=100, command=self._clear_log).pack()
+
+    def _browse_output(self):
+        path = tkinter.filedialog.askdirectory()
+        if path:
+            self._out_entry.delete(0, "end")
+            self._out_entry.insert(0, path)
+
+    def _log_write(self, text):
+        self._log.configure(state="normal")
+        self._log.insert("end", text)
+        self._log.see("end")
+        self._log.configure(state="disabled")
+
+    def _clear_log(self):
+        self._log.configure(state="normal")
+        self._log.delete("1.0", "end")
+        self._log.configure(state="disabled")
+
+    def _start_download(self):
+        url = self._url_entry.get().strip()
+        if not url:
+            self._log_write("[error] Please enter a URL.\n")
+            return
+
+        self._download_btn.configure(state="disabled")
+        self._stop_btn.configure(state="normal")
+        self._progress.start()
+
+        cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "orpheus.py"), url]
+        out_path = self._out_entry.get().strip()
+        if out_path:
+            cmd += ["-o", out_path]
+
+        self._log_write(f"[starting] {' '.join(cmd)}\n")
+
+        def run():
+            try:
+                self._download_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=os.path.dirname(__file__) or ".",
+                )
+                for line in self._download_process.stdout:
+                    self._output_queue.put(line)
+                self._download_process.wait()
+                rc = self._download_process.returncode
+                self._output_queue.put(f"\n[done] Process exited with code {rc}\n")
+            except Exception as e:
+                self._output_queue.put(f"[error] {e}\n")
+            finally:
+                self._output_queue.put(None)  # sentinel
+
+        threading.Thread(target=run, daemon=True).start()
+        self._poll_output()
+
+    def _poll_output(self):
+        try:
+            while True:
+                line = self._output_queue.get_nowait()
+                if line is None:
+                    self._on_download_finished()
+                    return
+                self._log_write(line)
+        except queue.Empty:
+            pass
+        self.after(100, self._poll_output)
+
+    def _on_download_finished(self):
+        self._progress.stop()
+        self._progress.set(0)
+        self._download_btn.configure(state="normal")
+        self._stop_btn.configure(state="disabled")
+        self._download_process = None
+
+    def _stop_download(self):
+        if self._download_process:
+            self._download_process.terminate()
+            self._log_write("\n[stopped] Download terminated by user.\n")
+
+    # ── Settings Tab ──────────────────────────────────────────────────────────
+
+    def _build_settings_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+
+        scroll = ctk.CTkScrollableFrame(parent, label_text="")
+        scroll.grid(row=0, column=0, sticky="nsew")
+        scroll.grid_columnconfigure(1, weight=1)
+
+        self._settings_data = load_settings()
+        self._settings_vars = {}  # key_path -> tkinter variable
+        row = [0]  # mutable counter
+
+        def next_row():
+            r = row[0]
+            row[0] += 1
+            return r
+
+        def section_label(text):
+            ctk.CTkLabel(scroll, text=text, font=ctk.CTkFont(size=13, weight="bold"),
+                         anchor="w", text_color="#7cb4e8").grid(
+                row=next_row(), column=0, columnspan=3, sticky="w", pady=(14, 2), padx=4)
+
+        def divider():
+            ctk.CTkFrame(scroll, height=1, fg_color="#3a3a3a").grid(
+                row=next_row(), column=0, columnspan=3, sticky="ew", pady=2)
+
+        def add_entry(label, key_path, placeholder=""):
+            r = next_row()
+            ctk.CTkLabel(scroll, text=label, anchor="w").grid(row=r, column=0, sticky="w", padx=(8, 4), pady=2)
+            var = tkinter.StringVar(value=str(self._nested_get(key_path)))
+            self._settings_vars[key_path] = var
+            entry = ctk.CTkEntry(scroll, textvariable=var, placeholder_text=placeholder)
+            entry.grid(row=r, column=1, sticky="ew", padx=4, pady=2)
+            return var
+
+        def add_path_entry(label, key_path):
+            r = next_row()
+            ctk.CTkLabel(scroll, text=label, anchor="w").grid(row=r, column=0, sticky="w", padx=(8, 4), pady=2)
+            var = tkinter.StringVar(value=str(self._nested_get(key_path)))
+            self._settings_vars[key_path] = var
+            entry = ctk.CTkEntry(scroll, textvariable=var)
+            entry.grid(row=r, column=1, sticky="ew", padx=4, pady=2)
+            def browse(v=var):
+                path = tkinter.filedialog.askdirectory()
+                if path:
+                    v.set(path)
+            ctk.CTkButton(scroll, text="Browse", width=60, command=browse).grid(row=r, column=2, padx=(4, 8), pady=2)
+
+        def add_switch(label, key_path):
+            r = next_row()
+            ctk.CTkLabel(scroll, text=label, anchor="w").grid(row=r, column=0, sticky="w", padx=(8, 4), pady=2)
+            var = tkinter.BooleanVar(value=bool(self._nested_get(key_path)))
+            self._settings_vars[key_path] = var
+            ctk.CTkSwitch(scroll, text="", variable=var, onvalue=True, offvalue=False).grid(
+                row=r, column=1, sticky="w", padx=4, pady=2)
+
+        def add_combo(label, key_path, options):
+            r = next_row()
+            ctk.CTkLabel(scroll, text=label, anchor="w").grid(row=r, column=0, sticky="w", padx=(8, 4), pady=2)
+            var = tkinter.StringVar(value=str(self._nested_get(key_path)))
+            self._settings_vars[key_path] = var
+            ctk.CTkComboBox(scroll, values=options, variable=var).grid(
+                row=r, column=1, sticky="w", padx=4, pady=2)
+
+        def add_json_textbox(label, key_path):
+            r = next_row()
+            ctk.CTkLabel(scroll, text=label, anchor="nw").grid(row=r, column=0, sticky="nw", padx=(8, 4), pady=2)
+            value = self._nested_get(key_path)
+            text_widget = ctk.CTkTextbox(scroll, height=80)
+            text_widget.insert("1.0", json.dumps(value, indent=2))
+            text_widget.grid(row=r, column=1, columnspan=2, sticky="ew", padx=4, pady=2)
+            self._settings_vars[key_path] = text_widget
+
+        # ── General ───────────────────────────────────────────────────────────
+        section_label("General")
+        divider()
+        add_path_entry("Download Path", ("global", "general", "download_path"))
+        add_combo("Download Quality", ("global", "general", "download_quality"), QUALITY_OPTIONS)
+        add_entry("Search Limit", ("global", "general", "search_limit"))
+
+        # ── Artist Downloading ────────────────────────────────────────────────
+        section_label("Artist Downloading")
+        divider()
+        add_switch("Return Credited Albums", ("global", "artist_downloading", "return_credited_albums"))
+        add_switch("Skip Already Downloaded (Separate)", ("global", "artist_downloading", "separate_tracks_skip_downloaded"))
+
+        # ── Formatting ────────────────────────────────────────────────────────
+        section_label("Formatting")
+        divider()
+        add_entry("Album Format", ("global", "formatting", "album_format"), "{name}{explicit}")
+        add_entry("Playlist Format", ("global", "formatting", "playlist_format"), "{name}{explicit}")
+        add_entry("Track Filename Format", ("global", "formatting", "track_filename_format"), "{album_artist} - {name}")
+        add_entry("Single Full Path Format", ("global", "formatting", "single_full_path_format"), "{artist} - {name}")
+        add_switch("Enable Zero-Fill (Track Numbers)", ("global", "formatting", "enable_zfill"))
+        add_switch("Force Album Format", ("global", "formatting", "force_album_format"))
+
+        # ── Codecs ────────────────────────────────────────────────────────────
+        section_label("Codecs")
+        divider()
+        add_switch("Proprietary Codecs", ("global", "codecs", "proprietary_codecs"))
+        add_switch("Spatial Codecs", ("global", "codecs", "spatial_codecs"))
+
+        # ── Module Defaults ───────────────────────────────────────────────────
+        section_label("Module Defaults")
+        divider()
+        add_entry("Lyrics Module", ("global", "module_defaults", "lyrics"), "default")
+        add_entry("Covers Module", ("global", "module_defaults", "covers"), "default")
+        add_entry("Credits Module", ("global", "module_defaults", "credits"), "default")
+
+        # ── Lyrics ────────────────────────────────────────────────────────────
+        section_label("Lyrics")
+        divider()
+        add_switch("Embed Lyrics", ("global", "lyrics", "embed_lyrics"))
+        add_switch("Embed Synced Lyrics", ("global", "lyrics", "embed_synced_lyrics"))
+        add_switch("Save Synced Lyrics (.lrc)", ("global", "lyrics", "save_synced_lyrics"))
+
+        # ── Covers ────────────────────────────────────────────────────────────
+        section_label("Covers")
+        divider()
+        add_switch("Embed Cover", ("global", "covers", "embed_cover"))
+        add_combo("Main Compression", ("global", "covers", "main_compression"), COMPRESSION_OPTIONS)
+        add_entry("Main Resolution", ("global", "covers", "main_resolution"))
+        add_switch("Save External Cover", ("global", "covers", "save_external"))
+        add_combo("External Format", ("global", "covers", "external_format"), EXTERNAL_FORMAT_OPTIONS)
+        add_combo("External Compression", ("global", "covers", "external_compression"), COMPRESSION_OPTIONS)
+        add_entry("External Resolution", ("global", "covers", "external_resolution"))
+        add_switch("Save Animated Cover", ("global", "covers", "save_animated_cover"))
+
+        # ── Playlist ──────────────────────────────────────────────────────────
+        section_label("Playlist")
+        divider()
+        add_switch("Save M3U", ("global", "playlist", "save_m3u"))
+        add_combo("M3U Paths", ("global", "playlist", "paths_m3u"), M3U_PATH_OPTIONS)
+        add_switch("Extended M3U", ("global", "playlist", "extended_m3u"))
+
+        # ── Advanced ──────────────────────────────────────────────────────────
+        section_label("Advanced")
+        divider()
+        add_switch("Advanced Login System", ("global", "advanced", "advanced_login_system"))
+        add_switch("Keep Original After Conversion", ("global", "advanced", "conversion_keep_original"))
+        add_entry("Cover Variance Threshold", ("global", "advanced", "cover_variance_threshold"))
+        add_switch("Debug Mode", ("global", "advanced", "debug_mode"))
+        add_switch("Disable Subscription Checks", ("global", "advanced", "disable_subscription_checks"))
+        add_switch("Enable Undesirable Conversions", ("global", "advanced", "enable_undesirable_conversions"))
+        add_switch("Ignore Existing Files", ("global", "advanced", "ignore_existing_files"))
+        add_switch("Ignore Different Artists", ("global", "advanced", "ignore_different_artists"))
+        add_json_textbox("Codec Conversions (JSON)", ("global", "advanced", "codec_conversions"))
+        add_json_textbox("Conversion Flags (JSON)", ("global", "advanced", "conversion_flags"))
+
+        # ── Modules ───────────────────────────────────────────────────────────
+        modules = self._settings_data.get("modules", {})
+        if modules:
+            section_label("Modules")
+            divider()
+            for module_name, module_cfg in modules.items():
+                ctk.CTkLabel(scroll, text=f"[{module_name}]", anchor="w",
+                             font=ctk.CTkFont(size=12, weight="bold")).grid(
+                    row=next_row(), column=0, columnspan=3, sticky="w", padx=(8, 4), pady=(8, 2))
+                for key, value in module_cfg.items():
+                    r = next_row()
+                    ctk.CTkLabel(scroll, text=f"  {key}", anchor="w").grid(
+                        row=r, column=0, sticky="w", padx=(16, 4), pady=2)
+                    var = tkinter.StringVar(value=str(value))
+                    self._settings_vars[("modules", module_name, key)] = var
+                    entry = ctk.CTkEntry(scroll, textvariable=var,
+                                        show="*" if "password" in key.lower() else "")
+                    entry.grid(row=r, column=1, sticky="ew", padx=4, pady=2)
+
+        # ── Save button ───────────────────────────────────────────────────────
+        save_row = next_row()
+        ctk.CTkFrame(scroll, height=1, fg_color="#3a3a3a").grid(
+            row=save_row, column=0, columnspan=3, sticky="ew", pady=(16, 4))
+        ctk.CTkButton(scroll, text="Save Settings", width=140, command=self._save_settings).grid(
+            row=next_row(), column=0, columnspan=3, pady=(4, 16))
+
+    # ── Settings helpers ──────────────────────────────────────────────────────
+
+    def _nested_get(self, key_path):
+        obj = self._settings_data
+        for k in key_path:
+            if isinstance(obj, dict) and k in obj:
+                obj = obj[k]
+            else:
+                return ""
+        return obj
+
+    def _nested_set(self, key_path, value):
+        obj = self._settings_data
+        for k in key_path[:-1]:
+            obj = obj[k]
+        obj[key_path[-1]] = value
+
+    def _save_settings(self):
+        for key_path, var in self._settings_vars.items():
+            # CTkTextbox — parse as JSON
+            if isinstance(var, ctk.CTkTextbox):
+                raw = var.get("1.0", "end").strip()
+                try:
+                    value = json.loads(raw)
+                except json.JSONDecodeError:
+                    self._show_error(f"Invalid JSON for {' > '.join(str(k) for k in key_path)}")
+                    return
+                self._nested_set(key_path, value)
+                continue
+
+            raw = var.get()
+
+            # Determine target type from existing value
+            existing = self._nested_get(key_path)
+            if isinstance(existing, bool) or isinstance(var, tkinter.BooleanVar):
+                self._nested_set(key_path, bool(var.get()))
+            elif isinstance(existing, int):
+                try:
+                    self._nested_set(key_path, int(raw))
+                except ValueError:
+                    self._show_error(f"Expected integer for {' > '.join(str(k) for k in key_path)}")
+                    return
+            elif isinstance(existing, float):
+                try:
+                    self._nested_set(key_path, float(raw))
+                except ValueError:
+                    self._show_error(f"Expected number for {' > '.join(str(k) for k in key_path)}")
+                    return
+            else:
+                self._nested_set(key_path, raw)
+
+        save_settings(self._settings_data)
+        self._show_info("Settings saved.")
+
+    def _show_error(self, message):
+        win = ctk.CTkToplevel(self)
+        win.title("Error")
+        win.geometry("360x120")
+        win.grab_set()
+        ctk.CTkLabel(win, text=message, wraplength=320).pack(pady=20)
+        ctk.CTkButton(win, text="OK", command=win.destroy).pack()
+
+    def _show_info(self, message):
+        win = ctk.CTkToplevel(self)
+        win.title("Info")
+        win.geometry("280x100")
+        win.grab_set()
+        ctk.CTkLabel(win, text=message).pack(pady=20)
+        ctk.CTkButton(win, text="OK", command=win.destroy).pack()
+
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
