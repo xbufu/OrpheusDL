@@ -227,8 +227,18 @@ def build_windows_installer(cfg, modules):
 
     iss_rel = str((INSTALLER_DIR / "windows" / "installer.iss").relative_to(PROJECT_ROOT))
 
-    # 1. Docker (preferred on Linux/macOS — no Wine needed)
-    if shutil.which("docker"):
+    # 1. Native Windows (Inno Setup installed directly)
+    for p in [
+        r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        r"C:\Program Files\Inno Setup 6\ISCC.exe",
+    ]:
+        if os.path.exists(p):
+            run_command([p, str(INSTALLER_DIR / "windows" / "installer.iss")])
+            print("Windows installer created in dist/")
+            return True
+
+    # 2. Docker (Linux/macOS only — amake/innosetup is a Linux image)
+    if sys.platform != "win32" and shutil.which("docker"):
         print("Using Docker (amake/innosetup) to compile installer…")
         run_command([
             "docker", "run", "--rm", "-i",
@@ -239,17 +249,7 @@ def build_windows_installer(cfg, modules):
         print("Windows installer created in dist/")
         return True
 
-    # 2. Native Windows
-    for p in [
-        r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-        r"C:\Program Files\Inno Setup 6\ISCC.exe",
-    ]:
-        if os.path.exists(p):
-            run_command([p, str(INSTALLER_DIR / "windows" / "installer.iss")])
-            print("Windows installer created in dist/")
-            return True
-
-    # 3. Wine fallback
+    # 3. Wine fallback (Linux/macOS)
     if shutil.which("wine"):
         wine_prefix = os.path.expanduser("~/.wine")
         for rel in [
