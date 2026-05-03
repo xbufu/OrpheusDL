@@ -1,0 +1,18 @@
+{
+    "app_name": "OrpheusDL",
+    "app_publisher": "OrpheusDL",
+    "app_url": "https://github.com/xbufu/OrpheusDL",
+    "app_id": "B3C4D5E6-F7A8-9012-BCDE-F01234567891",
+
+    "install": {
+        "default_dir_windows": "{autopf}\\OrpheusDL",
+        "default_dir_linux": "/opt/orpheusdl",
+        "create_desktop_shortcut": true,
+        "launch_after_install": true
+    },
+
+    "build": {
+        "include_ffmpeg": true,
+        "output_dir": "dist"
+    }
+}

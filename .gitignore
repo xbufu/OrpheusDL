@@ -10,3 +10,5 @@ temp/
 modules/
 extensions/
 sample-gui/
+dist/
+build/

@@ -2,13 +2,29 @@ import customtkinter as ctk
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 import tkinter
 import tkinter.filedialog
 
+__version__ = "1.0.0"
+
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "config", "settings.json")
+
+# When frozen by PyInstaller (--onedir), sys.executable is the bundled .exe.
+# orpheus.py is bundled as a data file alongside it, but we need a real Python
+# interpreter to run it.  Prefer python3/python from PATH; fall back to the
+# interpreter that launched this script (works when running from source).
+if getattr(sys, "frozen", False):
+    _APP_DIR = os.path.dirname(sys.executable)
+    _ORPHEUS_PY = os.path.join(_APP_DIR, "orpheus.py")
+    _PYTHON = shutil.which("python3") or shutil.which("python") or sys.executable
+else:
+    _APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    _ORPHEUS_PY = os.path.join(_APP_DIR, "orpheus.py")
+    _PYTHON = sys.executable
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -137,7 +153,7 @@ class App(ctk.CTk):
         self._stop_btn.configure(state="normal")
         self._progress.start()
 
-        cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "orpheus.py"), url]
+        cmd = [_PYTHON, _ORPHEUS_PY, url]
         out_path = self._out_entry.get().strip()
         if out_path:
             cmd += ["-o", out_path]

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.orpheusdl.orpheusdl</id>
+  <name>OrpheusDL</name>
+  <summary>Modular music archival tool</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      OrpheusDL is a modular music archival tool that lets you download music
+      from multiple streaming services. It supports multiple modules for
+      different platforms including Beatport and others.
+    </p>
+  </description>
+  <launchable type="desktop-id">orpheusdl.desktop</launchable>
+  <url type="homepage">https://github.com/yarrm80s/orpheusdl</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <provides>
+    <binary>OrpheusDL</binary>
+  </provides>
+  <releases>
+    <release version="1.0.0" date="2026-05-03"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=OrpheusDL
+Comment=Modular music archival tool
+Exec=OrpheusDL
+Icon=orpheusdl
+Type=Application
+Categories=AudioVideo;Audio;
+Terminal=false
+StartupWMClass=orpheusdl
