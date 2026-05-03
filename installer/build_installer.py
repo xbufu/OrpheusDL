@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import platform
-import re
 import shutil
 import stat
 import subprocess
@@ -40,15 +39,12 @@ def load_config():
 
 
 def get_version():
-    gui_path = PROJECT_ROOT / "gui.py"
-    if not gui_path.exists():
-        print("ERROR: gui.py not found")
+    cfg = load_config()
+    version = cfg.get("version", "").strip()
+    if not version:
+        print("ERROR: 'version' not found in build.json")
         sys.exit(1)
-    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', gui_path.read_text(encoding="utf-8"))
-    if not match:
-        print("ERROR: __version__ not found in gui.py")
-        sys.exit(1)
-    return match.group(1)
+    return version
 
 
 def get_available_modules():
