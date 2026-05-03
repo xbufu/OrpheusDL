@@ -167,7 +167,7 @@ AppPublisher={{#MyAppPublisher}}
 AppPublisherURL={{#MyAppURL}}
 DefaultDirName={default_dir}
 DefaultGroupName={{#MyAppName}}
-UninstallDisplayIcon={{app}}\\icon.ico
+UninstallDisplayIcon={{app}}\\{{#MyAppExeName}}
 UninstallDisplayName={{#MyAppName}}
 OutputDir=..\\..\\dist
 OutputBaseFilename={{#MyAppName}}-Setup-{{#MyAppVersion}}
@@ -205,9 +205,9 @@ Source: "{{#SourcePath}}\\config\\settings.json"; DestDir: "{{app}}\\config"; Co
 Source: "{{#RepoDir}}\\modules\\__init__.py"; DestDir: "{{app}}\\modules"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{{group}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; IconFilename: "{{app}}\\icon.ico"
+Name: "{{group}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"
 Name: "{{group}}\\{{cm:UninstallProgram,{{#MyAppName}}}}"; Filename: "{{uninstallexe}}"
-Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; IconFilename: "{{app}}\\icon.ico"; Tasks: desktopicon
+Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; Tasks: desktopicon
 {run_section}
 """
     path = windows_dir / "installer.iss"
