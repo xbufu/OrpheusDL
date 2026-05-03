@@ -28,11 +28,10 @@ jobs:
       - name: Build with PyInstaller
         run: python -m PyInstaller --clean gui.spec
 
-      - name: Copy config
+      - name: Prepare default config
         run: |
-          if (Test-Path "config") {
-            Copy-Item -Recurse config dist\OrpheusDL\config
-          }
+          New-Item -ItemType Directory -Force dist\OrpheusDL\_internal\config | Out-Null
+          Copy-Item settings.json.example dist\OrpheusDL\_internal\config\settings.json
         shell: pwsh
 
       - name: Install Inno Setup

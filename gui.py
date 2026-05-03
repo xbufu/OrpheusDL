@@ -11,20 +11,22 @@ import tkinter.filedialog
 
 __version__ = "1.0.0"
 
-SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "config", "settings.json")
-
-# When frozen by PyInstaller (--onedir), sys.executable is the bundled .exe.
-# orpheus.py is bundled as a data file alongside it, but we need a real Python
-# interpreter to run it.  Prefer python3/python from PATH; fall back to the
-# interpreter that launched this script (works when running from source).
+# When frozen by PyInstaller (--onedir), sys.executable is the bundled .exe
+# and __file__ points into the read-only _internal/ bundle dir.
+# User-writable files (settings) must live next to the exe instead.
 if getattr(sys, "frozen", False):
-    _APP_DIR = os.path.dirname(sys.executable)
-    _ORPHEUS_PY = os.path.join(_APP_DIR, "orpheus.py")
-    _PYTHON = shutil.which("python3") or shutil.which("python") or sys.executable
+    _APP_DIR    = os.path.dirname(sys.executable)       # writable install dir
+    _BUNDLE_DIR = getattr(sys, "_MEIPASS", _APP_DIR)    # read-only _internal/
+    _ORPHEUS_PY = os.path.join(_APP_DIR, "_internal", "orpheus.py")
+    _PYTHON     = shutil.which("python3") or shutil.which("python") or sys.executable
 else:
-    _APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    _APP_DIR    = os.path.dirname(os.path.abspath(__file__))
+    _BUNDLE_DIR = _APP_DIR
     _ORPHEUS_PY = os.path.join(_APP_DIR, "orpheus.py")
-    _PYTHON = sys.executable
+    _PYTHON     = sys.executable
+
+SETTINGS_PATH   = os.path.join(_APP_DIR, "config", "settings.json")
+_SETTINGS_EXAMPLE = os.path.join(_BUNDLE_DIR, "settings.json.example")
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -35,7 +37,39 @@ M3U_PATH_OPTIONS = ["absolute", "relative"]
 EXTERNAL_FORMAT_OPTIONS = ["png", "jpg", "jpeg"]
 
 
+def _ensure_settings():
+    if os.path.exists(SETTINGS_PATH):
+        return
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    if os.path.exists(_SETTINGS_EXAMPLE):
+        shutil.copy(_SETTINGS_EXAMPLE, SETTINGS_PATH)
+    else:
+        # Absolute fallback — write a minimal valid structure
+        with open(SETTINGS_PATH, "w") as f:
+            json.dump({"global": {
+                "general": {"download_path": "./downloads/", "download_quality": "hifi", "search_limit": 10},
+                "artist_downloading": {"return_credited_albums": True, "separate_tracks_skip_downloaded": True},
+                "formatting": {"album_format": "{name}{explicit}", "playlist_format": "{name}{explicit}",
+                               "track_filename_format": "{album_artist} - {name}",
+                               "single_full_path_format": "{artist} - {name}",
+                               "enable_zfill": True, "force_album_format": False},
+                "codecs": {"proprietary_codecs": False, "spatial_codecs": True},
+                "module_defaults": {"lyrics": "default", "covers": "default", "credits": "default"},
+                "lyrics": {"embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True},
+                "covers": {"embed_cover": True, "main_compression": "high", "main_resolution": 1400,
+                           "save_external": False, "external_format": "png", "external_compression": "low",
+                           "external_resolution": 3000, "save_animated_cover": True},
+                "playlist": {"save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True},
+                "advanced": {"advanced_login_system": False, "codec_conversions": {},
+                             "conversion_flags": {}, "conversion_keep_original": False,
+                             "cover_variance_threshold": 8, "debug_mode": False,
+                             "disable_subscription_checks": False, "enable_undesirable_conversions": False,
+                             "ignore_existing_files": False, "ignore_different_artists": True}
+            }, "extensions": {}, "modules": {}}, f, indent=4)
+
+
 def load_settings():
+    _ensure_settings()
     with open(SETTINGS_PATH, "r") as f:
         return json.load(f)
 
