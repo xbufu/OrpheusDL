@@ -330,7 +330,8 @@ def build_linux_appimage(cfg):
     apprun.write_text(f'#!/bin/bash\nAPPDIR="$(dirname "$(readlink -f "$0")")"\nexec "$APPDIR/usr/bin/{app_name}" "$@"\n')
     apprun.chmod(0o755)
 
-    out = DIST_DIR / f"{app_name}-x86_64.AppImage"
+    version = get_version().lstrip("v")
+    out = DIST_DIR / f"{app_name}-{version}-x86_64.AppImage"
     run_command(
         [appimagetool, "--no-appstream", str(appdir), str(out)],
         env={"APPIMAGE_EXTRACT_AND_RUN": "1"},

@@ -103,7 +103,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: linux-appimage
-          path: dist/OrpheusDL-x86_64.AppImage
+          path: dist/OrpheusDL-*-x86_64.AppImage
 
       - name: Upload deb
         uses: actions/upload-artifact@v7
@@ -129,6 +129,6 @@ jobs:
         with:
           files: |
             artifacts/windows-installer/OrpheusDL-Setup-*.exe
-            artifacts/linux-appimage/OrpheusDL-x86_64.AppImage
+            artifacts/linux-appimage/OrpheusDL-*-x86_64.AppImage
             artifacts/linux-deb/OrpheusDL-*.deb
           generate_release_notes: true
