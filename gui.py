@@ -11,6 +11,7 @@ import tempfile
 import threading
 import tkinter
 import tkinter.filedialog
+import tkinter.ttk
 import urllib.request
 from packaging.version import parse as parse_version
 
@@ -116,10 +117,12 @@ class App(ctk.CTk):
         self._tabview.pack(fill="both", expand=True, padx=10, pady=10)
 
         self._tabview.add("Download")
+        self._tabview.add("Search")
         self._tabview.add("Settings")
         self._tabview.add("Updates")
 
         self._build_download_tab(self._tabview.tab("Download"))
+        self._build_search_tab(self._tabview.tab("Search"))
         self._build_settings_tab(self._tabview.tab("Settings"))
         self._build_updates_tab(self._tabview.tab("Updates"))
 
@@ -349,6 +352,377 @@ class App(ctk.CTk):
         if hasattr(self, "_stop_event"):
             self._stop_event.set()
             self._log_write("\n[stopped] Download cancelled — will stop after current operation.\n")
+
+    # ── Search Tab ────────────────────────────────────────────────────────────
+
+    def _build_search_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        # Controls row
+        ctrl = ctk.CTkFrame(parent, fg_color="transparent")
+        ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 4))
+        ctrl.grid_columnconfigure(2, weight=1)
+
+        ctk.CTkLabel(ctrl, text="Platform:", anchor="w").grid(row=0, column=0, padx=(0, 4))
+        self._srch_platform_var = tkinter.StringVar()
+        self._srch_platform_combo = ctk.CTkComboBox(
+            ctrl, variable=self._srch_platform_var, width=130,
+            command=self._on_search_platform_change)
+        self._srch_platform_combo.grid(row=0, column=1, padx=(0, 10))
+
+        ctk.CTkLabel(ctrl, text="Type:", anchor="w").grid(row=0, column=2, sticky="e", padx=(0, 4))
+        self._srch_type_var = tkinter.StringVar(value="track")
+        self._srch_type_combo = ctk.CTkComboBox(
+            ctrl, variable=self._srch_type_var, width=110,
+            values=["track", "album", "artist", "playlist"])
+        self._srch_type_combo.grid(row=0, column=3, padx=(0, 10))
+
+        self._srch_entry = ctk.CTkEntry(ctrl, placeholder_text="Search query…")
+        self._srch_entry.grid(row=0, column=4, sticky="ew", padx=(0, 6))
+        self._srch_entry.bind("<Return>", lambda _e: self._start_search())
+        ctrl.grid_columnconfigure(4, weight=1)
+
+        self._srch_btn = ctk.CTkButton(ctrl, text="Search", width=90, command=self._start_search)
+        self._srch_btn.grid(row=0, column=5)
+
+        # Progress bar (hidden until search runs)
+        self._srch_progress = ctk.CTkProgressBar(parent, mode="indeterminate")
+        self._srch_progress.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        self._srch_progress.grid_remove()
+
+        # Results treeview
+        tree_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        tree_frame.grid(row=2, column=0, sticky="nsew")
+        tree_frame.grid_columnconfigure(0, weight=1)
+        tree_frame.grid_rowconfigure(0, weight=1)
+
+        style = tkinter.ttk.Style()
+        style.theme_use("default")
+        style.configure("Search.Treeview",
+            background="#1e1e2e", foreground="#c9d1d9",
+            fieldbackground="#1e1e2e", rowheight=22,
+            borderwidth=0, font=("Consolas", 10) if sys.platform == "win32" else ("Courier", 10))
+        style.configure("Search.Treeview.Heading",
+            background="#2a2a3e", foreground="#7cb4e8",
+            borderwidth=0, relief="flat")
+        style.map("Search.Treeview",
+            background=[("selected", "#3a3a5c")],
+            foreground=[("selected", "#ffffff")])
+        style.map("Search.Treeview.Heading", relief=[("active", "flat")])
+        style.configure("Search.Vertical.TScrollbar",
+            background="#2a2a3e", troughcolor="#1e1e2e", arrowcolor="#7cb4e8", borderwidth=0)
+
+        cols = ("#", "Title", "Artist", "Duration", "Year", "Quality")
+        self._srch_tree = tkinter.ttk.Treeview(
+            tree_frame, columns=cols, show="headings",
+            style="Search.Treeview", selectmode="extended")
+        for col, width, anchor in [
+            ("#", 36, "center"), ("Title", 220, "w"), ("Artist", 160, "w"),
+            ("Duration", 70, "center"), ("Year", 52, "center"), ("Quality", 120, "w")
+        ]:
+            self._srch_tree.heading(col, text=col,
+                command=lambda c=col: self._sort_search_col(c))
+            self._srch_tree.column(col, width=width, anchor=anchor, stretch=(col == "Title"))
+        self._srch_tree.tag_configure("odd", background="#222233")
+        self._srch_tree.tag_configure("even", background="#1e1e2e")
+        self._srch_tree.bind("<<TreeviewSelect>>", self._on_srch_select)
+        self._srch_tree.grid(row=0, column=0, sticky="nsew")
+
+        vsb = tkinter.ttk.Scrollbar(tree_frame, orient="vertical",
+            command=self._srch_tree.yview, style="Search.Vertical.TScrollbar")
+        vsb.grid(row=0, column=1, sticky="ns")
+        self._srch_tree.configure(yscrollcommand=vsb.set)
+
+        # Bottom row
+        bot = ctk.CTkFrame(parent, fg_color="transparent")
+        bot.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        bot.grid_columnconfigure(0, weight=1)
+
+        self._srch_status = ctk.CTkLabel(bot, text="", anchor="w", text_color="#8b949e")
+        self._srch_status.grid(row=0, column=0, sticky="w")
+
+        self._srch_dl_btn = ctk.CTkButton(
+            bot, text="Download Selected", width=160, state="disabled",
+            command=self._download_search_selected)
+        self._srch_dl_btn.grid(row=0, column=1)
+
+        # Internal state
+        self._srch_results = []        # list of formatted result dicts
+        self._srch_active = False
+        self._orpheus = None
+        self._orpheus_lock = threading.Lock()
+        self._srch_sort_col = None
+        self._srch_sort_rev = False
+
+        # Populate platforms after a tick so the window is ready
+        self.after(100, self._populate_search_platforms)
+
+    def _populate_search_platforms(self):
+        modules_dir = os.path.join(_APP_DIR, "modules")
+        platforms = []
+        if os.path.isdir(modules_dir):
+            platforms = sorted(
+                d for d in os.listdir(modules_dir)
+                if os.path.isfile(os.path.join(modules_dir, d, "interface.py"))
+            )
+        if platforms:
+            self._srch_platform_combo.configure(values=platforms)
+            self._srch_platform_var.set(platforms[0])
+            self._on_search_platform_change(platforms[0])
+        else:
+            self._srch_platform_combo.configure(values=["(none)"])
+            self._srch_platform_var.set("(none)")
+
+    def _on_search_platform_change(self, value):
+        platform = (value or "").lower()
+        if platform == "youtube":
+            types = ["track", "playlist", "channel"]
+        elif platform in ("beatport", "beatsource"):
+            types = ["track", "artist", "playlist", "album", "label"]
+        else:
+            types = ["track", "album", "artist", "playlist"]
+        self._srch_type_combo.configure(values=types)
+        if self._srch_type_var.get() not in types:
+            self._srch_type_var.set(types[0])
+
+    def _get_orpheus(self):
+        """Return a cached Orpheus instance, initializing if needed. May raise."""
+        with self._orpheus_lock:
+            if self._orpheus is not None:
+                return self._orpheus
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(_APP_DIR)
+            # Import here so it doesn't pollute the module namespace at startup
+            import sys as _sys
+            # Temporarily suppress the "No modules installed" exit()
+            from orpheus.core import Orpheus
+            instance = Orpheus()
+            with self._orpheus_lock:
+                self._orpheus = instance
+            return instance
+        finally:
+            os.chdir(old_cwd)
+
+    def _start_search(self):
+        if self._srch_active:
+            return
+        query = self._srch_entry.get().strip()
+        platform = self._srch_platform_var.get().strip()
+        search_type = self._srch_type_var.get().strip()
+
+        if not query:
+            self._srch_status.configure(text="Enter a search query.", text_color="#d29922")
+            return
+        if not platform or platform == "(none)":
+            self._srch_status.configure(text="No platform available.", text_color="#f85149")
+            return
+
+        self._srch_active = True
+        self._srch_btn.configure(state="disabled")
+        self._srch_dl_btn.configure(state="disabled")
+        self._srch_status.configure(text="Searching…", text_color="#8b949e")
+        self._srch_progress.grid()
+        self._srch_progress.start()
+        for row in self._srch_tree.get_children():
+            self._srch_tree.delete(row)
+        self._srch_results = []
+
+        threading.Thread(
+            target=self._run_search,
+            args=(platform, search_type, query),
+            daemon=True
+        ).start()
+
+    def _run_search(self, platform, search_type, query):
+        try:
+            old_cwd = os.getcwd()
+            os.chdir(_APP_DIR)
+            try:
+                orpheus = self._get_orpheus()
+                from utils.models import DownloadTypeEnum
+                from orpheus.music_downloader import beauty_format_seconds
+
+                type_map = {
+                    "track": DownloadTypeEnum.track,
+                    "album": DownloadTypeEnum.album,
+                    "artist": DownloadTypeEnum.artist,
+                    "playlist": DownloadTypeEnum.playlist,
+                    "channel": DownloadTypeEnum.artist,
+                    "label": DownloadTypeEnum.album,
+                }
+                query_type = type_map.get(search_type.lower())
+                if query_type is None:
+                    self.after(0, lambda: self._on_search_error(f"Unknown type: {search_type}"))
+                    return
+
+                platform_key = platform.lower().replace(" ", "")
+                module = orpheus.load_module(platform_key)
+                settings = orpheus.settings.get("global", {}).get("general", {})
+                limit = int(settings.get("search_limit", 20))
+                raw_results = module.search(query_type, query, limit=limit)
+            finally:
+                os.chdir(old_cwd)
+
+            formatted = []
+            for r in raw_results:
+                dur_sec = getattr(r, "duration", None)
+                try:
+                    dur_str = beauty_format_seconds(int(dur_sec)) if dur_sec is not None else ""
+                except Exception:
+                    dur_str = str(dur_sec) if dur_sec else ""
+                yr = getattr(r, "year", None)
+                addl = getattr(r, "additional", None) or []
+                formatted.append({
+                    "id":       str(getattr(r, "result_id", "")),
+                    "title":    str(getattr(r, "name", "") or ""),
+                    "artist":   ", ".join(str(a) for a in (getattr(r, "artists", []) or [])),
+                    "duration": dur_str,
+                    "year":     "" if yr is None or str(yr) == "None" else str(yr),
+                    "quality":  " / ".join(str(q) for q in addl) if addl else "",
+                    "explicit": getattr(r, "explicit", False),
+                    "platform": platform,
+                    "type":     search_type.lower(),
+                    "extra_kwargs": getattr(r, "extra_kwargs", {}) or {},
+                })
+
+            self.after(0, lambda: self._on_search_done(formatted, query))
+        except SystemExit:
+            self.after(0, lambda: self._on_search_error("Orpheus exited — check modules/settings."))
+        except Exception as exc:
+            msg = str(exc)
+            self.after(0, lambda m=msg: self._on_search_error(m))
+
+    def _on_search_done(self, results, query):
+        self._srch_progress.stop()
+        self._srch_progress.grid_remove()
+        self._srch_btn.configure(state="normal")
+        self._srch_active = False
+        self._srch_results = results
+
+        for row in self._srch_tree.get_children():
+            self._srch_tree.delete(row)
+
+        if not results:
+            self._srch_status.configure(text="No results found.", text_color="#d29922")
+            return
+
+        for i, r in enumerate(results, start=1):
+            tag = "odd" if i % 2 else "even"
+            e_mark = " [E]" if r.get("explicit") else ""
+            self._srch_tree.insert("", "end", iid=str(i - 1), tags=(tag,), values=(
+                i, r["title"] + e_mark, r["artist"],
+                r["duration"], r["year"], r["quality"],
+            ))
+
+        count = len(results)
+        self._srch_status.configure(
+            text=f"{count} result{'s' if count != 1 else ''} for \"{query}\"",
+            text_color="#8b949e")
+
+    def _on_search_error(self, msg):
+        self._srch_progress.stop()
+        self._srch_progress.grid_remove()
+        self._srch_btn.configure(state="normal")
+        self._srch_active = False
+        self._srch_status.configure(text=f"Error: {msg}", text_color="#f85149")
+
+    def _on_srch_select(self, _event=None):
+        sel = self._srch_tree.selection()
+        if sel:
+            count = len(sel)
+            self._srch_dl_btn.configure(
+                state="normal",
+                text=f"Download {count} item{'s' if count != 1 else ''}")
+        else:
+            self._srch_dl_btn.configure(state="disabled", text="Download Selected")
+
+    def _sort_search_col(self, col):
+        if self._srch_sort_col == col:
+            self._srch_sort_rev = not self._srch_sort_rev
+        else:
+            self._srch_sort_col = col
+            self._srch_sort_rev = False
+        col_map = {"#": 0, "Title": 1, "Artist": 2, "Duration": 3, "Year": 4, "Quality": 5}
+        idx = col_map.get(col, 0)
+        rows = [(self._srch_tree.set(iid, col), iid) for iid in self._srch_tree.get_children()]
+        rows.sort(key=lambda x: x[0].lower(), reverse=self._srch_sort_rev)
+        for pos, (_, iid) in enumerate(rows):
+            self._srch_tree.move(iid, "", pos)
+            tag = "odd" if pos % 2 else "even"
+            self._srch_tree.item(iid, tags=(tag,))
+
+    def _download_search_selected(self):
+        sel = self._srch_tree.selection()
+        if not sel:
+            return
+
+        # Switch to Download tab so the user can see output
+        self._tabview.set("Download")
+
+        for tree_iid in sel:
+            try:
+                idx = int(tree_iid)
+                result = self._srch_results[idx]
+            except (ValueError, IndexError):
+                continue
+
+            platform = result["platform"].lower().replace(" ", "")
+            search_type = result["type"].lower()
+            res_id = result["id"]
+
+            # Map search type to orpheus download type name
+            type_name = "track" if search_type == "channel" else search_type
+            argv = ["orpheus.py", "download", platform, type_name, res_id]
+            self._log_write(f"[starting] {' '.join(argv)}\n")
+
+            output_queue = self._output_queue
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+
+            class _Capture:
+                def write(self, text):
+                    if text:
+                        output_queue.put(text)
+                def flush(self):
+                    pass
+
+            def run(a=argv, se=stop_event):
+                old_argv   = sys.argv[:]
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                old_cwd    = os.getcwd()
+                sys.argv   = a
+                capture    = _Capture()
+                sys.stdout = capture
+                sys.stderr = capture
+                try:
+                    os.chdir(_APP_DIR)
+                    if not se.is_set():
+                        runpy.run_path(_ORPHEUS_PY, run_name="__main__")
+                    output_queue.put("\n[done] Download finished.\n")
+                except SystemExit as e:
+                    if e.code not in (None, 0):
+                        output_queue.put(f"\n[done] Exited with code {e.code}\n")
+                    else:
+                        output_queue.put("\n[done] Download finished.\n")
+                except Exception as e:
+                    output_queue.put(f"\n[error] {e}\n")
+                finally:
+                    sys.argv   = old_argv
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+                    os.chdir(old_cwd)
+                    output_queue.put(None)
+
+            self._download_btn.configure(state="disabled")
+            self._stop_btn.configure(state="normal")
+            self._progress.start()
+            threading.Thread(target=run, daemon=True).start()
+            self._poll_output()
+            # Only queue one at a time; user can re-click for next
+            break
 
     # ── Settings Tab ──────────────────────────────────────────────────────────
 
