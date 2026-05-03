@@ -2,8 +2,8 @@ import customtkinter as ctk
 import json
 import os
 import queue
+import runpy
 import shutil
-import subprocess
 import sys
 import threading
 import tkinter
@@ -17,13 +17,11 @@ __version__ = "1.0.0"
 if getattr(sys, "frozen", False):
     _APP_DIR    = os.path.dirname(sys.executable)       # writable install dir
     _BUNDLE_DIR = getattr(sys, "_MEIPASS", _APP_DIR)    # read-only _internal/
-    _ORPHEUS_PY = os.path.join(_APP_DIR, "_internal", "orpheus.py")
-    _PYTHON     = shutil.which("python3") or shutil.which("python") or sys.executable
+    _ORPHEUS_PY = os.path.join(_BUNDLE_DIR, "orpheus.py")
 else:
     _APP_DIR    = os.path.dirname(os.path.abspath(__file__))
     _BUNDLE_DIR = _APP_DIR
     _ORPHEUS_PY = os.path.join(_APP_DIR, "orpheus.py")
-    _PYTHON     = sys.executable
 
 SETTINGS_PATH   = os.path.join(_APP_DIR, "config", "settings.json")
 _SETTINGS_EXAMPLE = os.path.join(_BUNDLE_DIR, "settings.json.example")
@@ -86,7 +84,6 @@ class App(ctk.CTk):
         self.geometry("900x620")
         self.minsize(700, 500)
 
-        self._download_process = None
         self._output_queue = queue.Queue()
 
         self._tabview = ctk.CTkTabview(self)
@@ -186,32 +183,50 @@ class App(ctk.CTk):
         self._download_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
         self._progress.start()
+        self._stop_event = threading.Event()
 
-        cmd = [_PYTHON, _ORPHEUS_PY, url]
+        argv = ["orpheus.py", url]
         out_path = self._out_entry.get().strip()
         if out_path:
-            cmd += ["-o", out_path]
+            argv += ["-o", out_path]
 
-        self._log_write(f"[starting] {' '.join(cmd)}\n")
+        self._log_write(f"[starting] {' '.join(argv)}\n")
+
+        output_queue = self._output_queue
+        stop_event = self._stop_event
+
+        class _Capture:
+            def write(self, text):
+                if text:
+                    output_queue.put(text)
+            def flush(self):
+                pass
 
         def run():
+            old_argv   = sys.argv[:]
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.argv   = argv
+            capture    = _Capture()
+            sys.stdout = capture
+            sys.stderr = capture
             try:
-                self._download_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    cwd=os.path.dirname(__file__) or ".",
-                )
-                for line in self._download_process.stdout:
-                    self._output_queue.put(line)
-                self._download_process.wait()
-                rc = self._download_process.returncode
-                self._output_queue.put(f"\n[done] Process exited with code {rc}\n")
+                if stop_event.is_set():
+                    return
+                runpy.run_path(_ORPHEUS_PY, run_name="__main__")
+                output_queue.put("\n[done] Download finished.\n")
+            except SystemExit as e:
+                if e.code not in (None, 0):
+                    output_queue.put(f"\n[done] Exited with code {e.code}\n")
+                else:
+                    output_queue.put("\n[done] Download finished.\n")
             except Exception as e:
-                self._output_queue.put(f"[error] {e}\n")
+                output_queue.put(f"\n[error] {e}\n")
             finally:
-                self._output_queue.put(None)  # sentinel
+                sys.argv   = old_argv
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                output_queue.put(None)  # sentinel
 
         threading.Thread(target=run, daemon=True).start()
         self._poll_output()
@@ -233,12 +248,11 @@ class App(ctk.CTk):
         self._progress.set(0)
         self._download_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
-        self._download_process = None
 
     def _stop_download(self):
-        if self._download_process:
-            self._download_process.terminate()
-            self._log_write("\n[stopped] Download terminated by user.\n")
+        if hasattr(self, "_stop_event"):
+            self._stop_event.set()
+            self._log_write("\n[stopped] Download cancelled — will stop after current operation.\n")
 
     # ── Settings Tab ──────────────────────────────────────────────────────────
 
