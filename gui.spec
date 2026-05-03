@@ -23,6 +23,7 @@ a = Analysis(
         (CTK_PATH, 'customtkinter'),
         (os.path.join(ROOT, 'settings.json.example'), '.'),
         (os.path.join(ROOT, 'build.json'), '.'),
+        *( [(os.path.join(ROOT, 'icon.ico'), '.')] if os.path.exists(os.path.join(ROOT, 'icon.ico')) else [] ),
         (os.path.join(ROOT, 'orpheus.py'), '.'),
         (os.path.join(ROOT, 'orpheus'), 'orpheus'),
         (os.path.join(ROOT, 'utils'), 'utils'),
