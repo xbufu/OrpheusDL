@@ -1,24 +1,30 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
 import customtkinter
 
 ROOT = os.path.abspath(os.path.dirname(SPEC))
 CTK_PATH = os.path.dirname(customtkinter.__file__)
 
+# Bundle ffmpeg/ffprobe binaries from bin/ if present
+_bin_dir = os.path.join(ROOT, 'bin')
+_ext = '.exe' if sys.platform == 'win32' else ''
+_binaries = []
+for _name in ('ffmpeg', 'ffprobe'):
+    _path = os.path.join(_bin_dir, _name + _ext)
+    if os.path.exists(_path):
+        _binaries.append((_path, '.'))
+
 a = Analysis(
     [os.path.join(ROOT, 'gui.py')],
     pathex=[ROOT],
-    binaries=[],
+    binaries=_binaries,
     datas=[
-        # CustomTkinter themes and assets
         (CTK_PATH, 'customtkinter'),
-        # Default config
         (os.path.join(ROOT, 'settings.json.example'), '.'),
-        # OrpheusDL core (run as subprocess from GUI)
         (os.path.join(ROOT, 'orpheus.py'), '.'),
         (os.path.join(ROOT, 'orpheus'), 'orpheus'),
         (os.path.join(ROOT, 'utils'), 'utils'),
-        # Modules (present at build time)
         (os.path.join(ROOT, 'modules'), 'modules'),
     ],
     hiddenimports=[
@@ -29,12 +35,24 @@ a = Analysis(
         'PIL.ImageTk',
         'defusedxml',
         'mutagen',
+        'mutagen.flac',
+        'mutagen.mp3',
+        'mutagen.mp4',
+        'mutagen.id3',
+        'mutagen.oggvorbis',
+        'mutagen.oggopus',
         'requests',
         'tqdm',
+        'ffmpeg',
+        'ffmpeg.nodes',
+        'm3u8',
+        'Cryptodome',
+        'Cryptodome.Cipher',
+        'Cryptodome.Cipher.AES',
+        'google.protobuf',
     ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
+    hookspath=[ROOT],
+    runtime_hooks=[os.path.join(ROOT, 'hook-ffmpeg.py')],
     excludes=[],
     noarchive=False,
 )
