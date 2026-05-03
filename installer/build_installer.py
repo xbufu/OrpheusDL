@@ -219,19 +219,37 @@ Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}";
     print("Created installer/windows/installer.iss")
 
 
-def _find_inno_setup():
-    """Return (cmd_prefix, iscc_path) or None if not found.
-    Checks native Windows paths first, then Wine on Linux/macOS.
-    """
-    # Native Windows paths
+def build_windows_installer(cfg, modules):
+    print("\n=== Windows installer ===")
+    version = get_version()
+    generate_version_iss(version)
+    create_inno_setup_script(cfg, modules)
+
+    iss_rel = str((INSTALLER_DIR / "windows" / "installer.iss").relative_to(PROJECT_ROOT))
+
+    # 1. Docker (preferred on Linux/macOS — no Wine needed)
+    if shutil.which("docker"):
+        print("Using Docker (amake/innosetup) to compile installer…")
+        run_command([
+            "docker", "run", "--rm", "-i",
+            "-v", f"{PROJECT_ROOT}:/work",
+            "amake/innosetup",
+            iss_rel,
+        ])
+        print("Windows installer created in dist/")
+        return True
+
+    # 2. Native Windows
     for p in [
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe",
     ]:
         if os.path.exists(p):
-            return [], p
+            run_command([p, str(INSTALLER_DIR / "windows" / "installer.iss")])
+            print("Windows installer created in dist/")
+            return True
 
-    # Wine on Linux/macOS
+    # 3. Wine fallback
     if shutil.which("wine"):
         wine_prefix = os.path.expanduser("~/.wine")
         for rel in [
@@ -240,32 +258,15 @@ def _find_inno_setup():
         ]:
             p = os.path.join(wine_prefix, rel)
             if os.path.exists(p):
-                return ["wine"], p
+                run_command(["wine", p, str(INSTALLER_DIR / "windows" / "installer.iss")])
+                print("Windows installer created in dist/")
+                return True
 
-    return None
-
-
-def build_windows_installer(cfg, modules):
-    print("\n=== Windows installer ===")
-    version = get_version()
-    generate_version_iss(version)
-    create_inno_setup_script(cfg, modules)
-
-    found = _find_inno_setup()
-    if not found:
-        print("Inno Setup not found — installer.iss written but not compiled.")
-        print()
-        print("  On Windows : install Inno Setup 6 from https://jrsoftware.org/isinfo.php")
-        print("  On Ubuntu  : install Wine then run:")
-        print("    sudo apt-get install wine64")
-        print("    wget https://jrsoftware.org/download.php/is.exe -O /tmp/is.exe")
-        print("    wine /tmp/is.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART")
-        return False
-
-    prefix, iscc = found
-    run_command([*prefix, iscc, str(INSTALLER_DIR / "windows" / "installer.iss")])
-    print(f"Windows installer created in dist/")
-    return True
+    print("No Inno Setup compiler found — installer.iss written but not compiled.")
+    print()
+    print("  Easiest : install Docker, then re-run (uses amake/innosetup image automatically)")
+    print("  Windows : install Inno Setup 6 from https://jrsoftware.org/isinfo.php")
+    return False
 
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
