@@ -2,6 +2,7 @@ import customtkinter as ctk
 import json
 import os
 import queue
+import re
 import runpy
 import shutil
 import sys
@@ -139,19 +140,31 @@ class App(ctk.CTk):
         self._log = tkinter.Text(
             parent,
             bg="#1a1a2e",
-            fg="#e0e0e0",
-            insertbackground="#e0e0e0",
+            fg="#c9d1d9",
+            insertbackground="#c9d1d9",
             selectbackground="#3a3a5c",
             relief="flat",
-            font=("Courier", 10),
+            font=("Consolas", 10) if sys.platform == "win32" else ("Courier", 10),
             wrap="word",
             state="disabled",
         )
         self._log.grid(row=4, column=0, sticky="nsew", pady=(6, 0))
 
+        # Colour tags
+        self._log.tag_configure("header",  foreground="#58a6ff", font=(
+            ("Consolas", 10, "bold") if sys.platform == "win32" else ("Courier", 10, "bold")))
+        self._log.tag_configure("success", foreground="#3fb950")
+        self._log.tag_configure("error",   foreground="#f85149")
+        self._log.tag_configure("warning", foreground="#d29922")
+        self._log.tag_configure("gray",    foreground="#8b949e")
+        self._log.tag_configure("meta",    foreground="#8b949e")
+        self._log.tag_configure("dim",     foreground="#6e7681")
+
         scrollbar = ctk.CTkScrollbar(parent, command=self._log.yview)
         scrollbar.grid(row=4, column=1, sticky="ns", pady=(6, 0))
         self._log.configure(yscrollcommand=scrollbar.set)
+
+        self._log_last_empty = False
 
         clear_frame = ctk.CTkFrame(parent, fg_color="transparent")
         clear_frame.grid(row=5, column=0, columnspan=2, sticky="e", pady=(4, 0))
@@ -163,9 +176,64 @@ class App(ctk.CTk):
             self._out_entry.delete(0, "end")
             self._out_entry.insert(0, path)
 
+    # ── ANSI / text processing ─────────────────────────────────────────────────
+
+    _ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    # Track status: "1/10  +  title" → replace + / > / x with symbols
+    _STATUS_RE = re.compile(r'^(\s*\d+/\d+\s+)([+>xX✓✗▶])(\s+)')
+
+    def _process_line(self, line):
+        """Strip ANSI, replace status markers, return (text, tag)."""
+        line = self._ANSI_RE.sub('', line)
+
+        # Replace tqdm-style carriage return lines (progress bars)
+        if '\r' in line:
+            line = line.rsplit('\r', 1)[-1]
+
+        m = self._STATUS_RE.match(line)
+        if m:
+            prefix, marker, space = m.group(1), m.group(2), m.group(3)
+            rest = line[m.end():]
+            if marker in ('+', '✓'):
+                return prefix + '✓' + space + rest, 'success'
+            elif marker in ('>', '▶'):
+                return prefix + '▶' + space + rest, 'dim'
+            elif marker in ('x', 'X', '✗'):
+                return prefix + '✗' + space + rest, 'error'
+
+        s = line.strip()
+        if s.startswith('===') and s.endswith('==='):
+            return line, 'header'
+        if s.startswith(('[ERROR]', 'Error', 'Traceback', 'FileNotFoundError',
+                         'ModuleNotFoundError', '✗', '[error]')):
+            return line, 'error'
+        if s.startswith(('[WARNING]', 'Warning', '[warn]')):
+            return line, 'warning'
+        if s.startswith(('[done]', '[ok]', '✓', '[starting]')):
+            return line, 'success' if s.startswith(('[done]', '[ok]', '✓')) else 'dim'
+        if s.startswith(('[stopped]', '[skip]')):
+            return line, 'gray'
+        # Metadata lines (key: value indented)
+        if re.match(r'^\s+(Artist|Album|Title|Duration|Quality|Year|Track|Playlist|Number|Release|Platform):', s):
+            return line, 'meta'
+        return line, None
+
     def _log_write(self, text):
         self._log.configure(state="normal")
-        self._log.insert("end", text)
+        for line in text.splitlines(keepends=True):
+            stripped = line.strip()
+            if not stripped:
+                if self._log_last_empty:
+                    continue   # suppress consecutive blank lines
+                self._log_last_empty = True
+                self._log.insert("end", line)
+            else:
+                self._log_last_empty = False
+                processed, tag = self._process_line(line)
+                if tag:
+                    self._log.insert("end", processed, tag)
+                else:
+                    self._log.insert("end", processed)
         self._log.see("end")
         self._log.configure(state="disabled")
 
@@ -173,6 +241,7 @@ class App(ctk.CTk):
         self._log.configure(state="normal")
         self._log.delete("1.0", "end")
         self._log.configure(state="disabled")
+        self._log_last_empty = False
 
     def _start_download(self):
         url = self._url_entry.get().strip()
