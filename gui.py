@@ -14,17 +14,24 @@ import tkinter.filedialog
 import urllib.request
 from packaging.version import parse as parse_version
 
-__version__ = "1.0.0"
-
-# Read from build.json if present, otherwise fall back to defaults
 def _load_build_cfg():
-    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build.json")
-    if os.path.exists(p):
-        with open(p) as f:
-            return json.load(f)
+    # When frozen, build.json is in _MEIPASS (_internal/); when running from
+    # source it's next to gui.py. Check both so the version is always found.
+    candidates = [
+        getattr(sys, "_MEIPASS", None),
+        os.path.dirname(os.path.abspath(__file__)),
+    ]
+    for base in candidates:
+        if base is None:
+            continue
+        p = os.path.join(base, "build.json")
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
     return {}
 
 _BUILD_CFG = _load_build_cfg()
+__version__ = _BUILD_CFG.get("version", "1.0.0")
 _APP_URL = _BUILD_CFG.get("app_url", "https://github.com/xbufu/OrpheusDL")
 # Derive owner/repo from URL: "https://github.com/owner/repo"
 _GH_OWNER_REPO = "/".join(_APP_URL.rstrip("/").split("/")[-2:])

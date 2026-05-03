@@ -25,6 +25,16 @@ jobs:
           pip install -r requirements-gui.txt
           pip install pyinstaller
 
+      - name: Stamp version into build.json
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart("v")
+          if (-not $ver) { $ver = "0.0.0-dev" }
+          $json = Get-Content build.json -Raw | ConvertFrom-Json
+          $json.version = $ver
+          $json | ConvertTo-Json -Depth 10 | Set-Content build.json
+        shell: pwsh
+
       - name: Download ffmpeg for bundling
         run: |
           New-Item -ItemType Directory -Force bin | Out-Null
@@ -80,6 +90,18 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-gui.txt
           pip install pyinstaller
+
+      - name: Stamp version into build.json
+        run: |
+          tag="${{ github.ref_name }}"
+          ver="${tag#v}"
+          [ -z "$ver" ] && ver="0.0.0-dev"
+          python3 -c "
+          import json, sys
+          with open('build.json') as f: d = json.load(f)
+          d['version'] = sys.argv[1]
+          with open('build.json', 'w') as f: json.dump(d, f, indent=4)
+          " "$ver"
 
       - name: Download ffmpeg for bundling
         run: |
