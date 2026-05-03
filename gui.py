@@ -5,12 +5,30 @@ import queue
 import re
 import runpy
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import tkinter
 import tkinter.filedialog
+import urllib.request
+from packaging.version import parse as parse_version
 
 __version__ = "1.0.0"
+
+# Read from build.json if present, otherwise fall back to defaults
+def _load_build_cfg():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build.json")
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return {}
+
+_BUILD_CFG = _load_build_cfg()
+_APP_URL = _BUILD_CFG.get("app_url", "https://github.com/xbufu/OrpheusDL")
+# Derive owner/repo from URL: "https://github.com/owner/repo"
+_GH_OWNER_REPO = "/".join(_APP_URL.rstrip("/").split("/")[-2:])
+_GH_API_LATEST = f"https://api.github.com/repos/{_GH_OWNER_REPO}/releases/latest"
 
 # When frozen by PyInstaller (--onedir), sys.executable is the bundled .exe
 # and __file__ points into the read-only _internal/ bundle dir.
@@ -92,9 +110,11 @@ class App(ctk.CTk):
 
         self._tabview.add("Download")
         self._tabview.add("Settings")
+        self._tabview.add("Updates")
 
         self._build_download_tab(self._tabview.tab("Download"))
         self._build_settings_tab(self._tabview.tab("Settings"))
+        self._build_updates_tab(self._tabview.tab("Updates"))
 
     # ── Download Tab ──────────────────────────────────────────────────────────
 
@@ -569,6 +589,209 @@ class App(ctk.CTk):
         win.grab_set()
         ctk.CTkLabel(win, text=message).pack(pady=20)
         ctk.CTkButton(win, text="OK", command=win.destroy).pack()
+
+    # ── Updates Tab ───────────────────────────────────────────────────────────
+
+    def _build_updates_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+
+        # Version info row
+        info_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        info_frame.grid(row=0, column=0, sticky="ew", pady=(12, 4), padx=8)
+        info_frame.grid_columnconfigure(1, weight=1)
+        info_frame.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(info_frame, text="Current version:", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self._upd_current_lbl = ctk.CTkLabel(info_frame, text=__version__, anchor="w",
+                                              font=ctk.CTkFont(weight="bold"))
+        self._upd_current_lbl.grid(row=0, column=1, sticky="w")
+
+        ctk.CTkLabel(info_frame, text="Latest version:", anchor="w").grid(row=0, column=2, sticky="w", padx=(20, 6))
+        self._upd_latest_lbl = ctk.CTkLabel(info_frame, text="—", anchor="w",
+                                             font=ctk.CTkFont(weight="bold"))
+        self._upd_latest_lbl.grid(row=0, column=3, sticky="w")
+
+        # Status label
+        self._upd_status_lbl = ctk.CTkLabel(parent, text="", anchor="w", text_color="#8b949e")
+        self._upd_status_lbl.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 4))
+
+        # Release notes
+        ctk.CTkLabel(parent, text="Release notes:", anchor="w").grid(row=2, column=0, sticky="w", padx=8, pady=(4, 2))
+        self._upd_notes = ctk.CTkTextbox(parent, height=220, state="disabled")
+        self._upd_notes.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+
+        # Progress bar (hidden until download starts)
+        self._upd_progress = ctk.CTkProgressBar(parent)
+        self._upd_progress.set(0)
+        self._upd_progress.grid(row=4, column=0, sticky="ew", padx=8, pady=(0, 6))
+        self._upd_progress.grid_remove()
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_frame.grid(row=5, column=0, sticky="w", padx=8, pady=(4, 12))
+
+        self._upd_check_btn = ctk.CTkButton(btn_frame, text="Check for Updates",
+                                             width=160, command=self._check_updates)
+        self._upd_check_btn.pack(side="left", padx=(0, 10))
+
+        self._upd_install_btn = ctk.CTkButton(btn_frame, text="Download & Install",
+                                               width=160, state="disabled",
+                                               command=self._download_and_install)
+        self._upd_install_btn.pack(side="left")
+
+        self._upd_asset_url = None   # filled by _check_updates
+        self._upd_asset_name = None
+
+    def _check_updates(self):
+        self._upd_check_btn.configure(state="disabled")
+        self._upd_status_lbl.configure(text="Checking…", text_color="#8b949e")
+        self._upd_install_btn.configure(state="disabled")
+        self._upd_asset_url = None
+        self._upd_asset_name = None
+
+        def worker():
+            try:
+                req = urllib.request.Request(
+                    _GH_API_LATEST,
+                    headers={"Accept": "application/vnd.github+json",
+                             "User-Agent": f"OrpheusDL/{__version__}"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+
+                tag = data.get("tag_name", "")
+                latest = tag.lstrip("v")
+                notes = data.get("body", "") or ""
+                assets = data.get("assets", [])
+
+                # Pick platform-appropriate asset
+                asset_url = None
+                asset_name = None
+                if sys.platform == "win32":
+                    for a in assets:
+                        if a["name"].endswith(".exe"):
+                            asset_url = a["browser_download_url"]
+                            asset_name = a["name"]
+                            break
+                else:
+                    # Prefer AppImage, fall back to deb
+                    for a in assets:
+                        if a["name"].endswith(".AppImage"):
+                            asset_url = a["browser_download_url"]
+                            asset_name = a["name"]
+                            break
+                    if not asset_url:
+                        for a in assets:
+                            if a["name"].endswith(".deb"):
+                                asset_url = a["browser_download_url"]
+                                asset_name = a["name"]
+                                break
+
+                self.after(0, lambda: self._on_check_done(latest, notes, asset_url, asset_name))
+            except Exception as exc:
+                self.after(0, lambda: self._on_check_error(str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_check_done(self, latest, notes, asset_url, asset_name):
+        self._upd_check_btn.configure(state="normal")
+        self._upd_latest_lbl.configure(text=latest if latest else "unknown")
+
+        self._upd_notes.configure(state="normal")
+        self._upd_notes.delete("1.0", "end")
+        self._upd_notes.insert("1.0", notes or "(no release notes)")
+        self._upd_notes.configure(state="disabled")
+
+        try:
+            is_newer = latest and parse_version(latest) > parse_version(__version__)
+        except Exception:
+            is_newer = False
+
+        if is_newer:
+            self._upd_status_lbl.configure(
+                text=f"Update available: {latest}", text_color="#3fb950")
+            if asset_url:
+                self._upd_asset_url = asset_url
+                self._upd_asset_name = asset_name
+                self._upd_install_btn.configure(state="normal")
+            else:
+                self._upd_status_lbl.configure(
+                    text=f"Update available ({latest}) — no binary asset found for this platform.",
+                    text_color="#d29922")
+        else:
+            self._upd_status_lbl.configure(
+                text="You are up to date.", text_color="#3fb950")
+
+    def _on_check_error(self, msg):
+        self._upd_check_btn.configure(state="normal")
+        self._upd_status_lbl.configure(text=f"Check failed: {msg}", text_color="#f85149")
+
+    def _download_and_install(self):
+        if not self._upd_asset_url:
+            return
+
+        self._upd_install_btn.configure(state="disabled")
+        self._upd_check_btn.configure(state="disabled")
+        self._upd_status_lbl.configure(text="Downloading…", text_color="#8b949e")
+        self._upd_progress.set(0)
+        self._upd_progress.grid()
+
+        asset_url = self._upd_asset_url
+        asset_name = self._upd_asset_name or "update"
+
+        def worker():
+            try:
+                tmp_dir = tempfile.mkdtemp(prefix="orpheusdl_update_")
+                dest = os.path.join(tmp_dir, asset_name)
+
+                def reporthook(count, block_size, total_size):
+                    if total_size > 0:
+                        frac = min(count * block_size / total_size, 1.0)
+                        self.after(0, lambda f=frac: self._upd_progress.set(f))
+
+                urllib.request.urlretrieve(asset_url, dest, reporthook=reporthook)
+                self.after(0, lambda: self._upd_progress.set(1.0))
+                self.after(0, lambda: self._run_installer(dest))
+            except Exception as exc:
+                self.after(0, lambda: self._on_install_error(str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_installer(self, path):
+        self._upd_status_lbl.configure(text="Launching installer…", text_color="#8b949e")
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen([path, "/SILENT"])
+                self.after(1500, sys.exit)
+            elif path.endswith(".AppImage"):
+                os.chmod(path, 0o755)
+                # Replace current AppImage if running as one, otherwise just open
+                current = os.environ.get("APPIMAGE", "")
+                if current and os.path.isfile(current):
+                    shutil.copy2(path, current)
+                    os.chmod(current, 0o755)
+                    self._upd_status_lbl.configure(
+                        text="Updated. Restart the app to use the new version.", text_color="#3fb950")
+                else:
+                    subprocess.Popen([path])
+                    self.after(1500, sys.exit)
+            elif path.endswith(".deb"):
+                subprocess.Popen(["pkexec", "dpkg", "-i", path])
+                self._upd_status_lbl.configure(
+                    text="Installer launched. Restart the app after installation.", text_color="#3fb950")
+            else:
+                self._upd_status_lbl.configure(
+                    text=f"Downloaded to {path} — install manually.", text_color="#d29922")
+        except Exception as exc:
+            self._on_install_error(str(exc))
+        finally:
+            self._upd_check_btn.configure(state="normal")
+
+    def _on_install_error(self, msg):
+        self._upd_check_btn.configure(state="normal")
+        self._upd_install_btn.configure(state="normal")
+        self._upd_progress.grid_remove()
+        self._upd_status_lbl.configure(text=f"Install failed: {msg}", text_color="#f85149")
 
 
 if __name__ == "__main__":
