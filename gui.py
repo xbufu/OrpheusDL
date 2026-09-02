@@ -98,7 +98,27 @@ def _ensure_settings():
 def load_settings():
     _ensure_settings()
     with open(SETTINGS_PATH, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+
+    deezer_path = os.path.join(_APP_DIR, "modules", "deezer", "interface.py")
+    if os.path.exists(deezer_path):
+        modules = data.setdefault("modules", {})
+        deezer_defaults = {
+            "client_id": "447462",
+            "client_secret": "a83bf7f38ad2f137e444727cfc3775cf",
+            "bf_secret": "",
+            "email": "",
+            "password": ""
+        }
+        if "deezer" not in modules:
+            modules["deezer"] = deezer_defaults
+            save_settings(data)
+        else:
+            missing = {key: value for key, value in deezer_defaults.items() if key not in modules["deezer"]}
+            if missing:
+                modules["deezer"].update(missing)
+                save_settings(data)
+    return data
 
 
 def save_settings(data):
