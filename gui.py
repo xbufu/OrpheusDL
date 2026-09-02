@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import json
 import os
+import pickle
 import queue
 import re
 import runpy
@@ -51,6 +52,7 @@ else:
     _ORPHEUS_PY = os.path.join(_APP_DIR, "orpheus.py")
 
 SETTINGS_PATH   = os.path.join(_APP_DIR, "config", "settings.json")
+SESSION_STORAGE_PATH = os.path.join(_APP_DIR, "config", "loginstorage.bin")
 _SETTINGS_EXAMPLE = os.path.join(_BUNDLE_DIR, "settings.json.example")
 
 ctk.set_appearance_mode("dark")
@@ -102,6 +104,40 @@ def load_settings():
 def save_settings(data):
     with open(SETTINGS_PATH, "w") as f:
         json.dump(data, f, indent=4)
+
+
+def _read_module_session_value(module_name, setting):
+    if not os.path.exists(SESSION_STORAGE_PATH):
+        return ""
+    try:
+        with open(SESSION_STORAGE_PATH, "rb") as f:
+            storage = pickle.load(f)
+        module = storage.get("modules", {}).get(module_name, {})
+        selected = module.get("selected", "default")
+        session = module.get("sessions", {}).get(selected, {})
+        return session.get("custom_data", {}).get(setting, "")
+    except (OSError, EOFError, KeyError, TypeError, ValueError, pickle.UnpicklingError):
+        return ""
+
+
+def _write_module_session_value(module_name, setting, value):
+    storage = {}
+    if os.path.exists(SESSION_STORAGE_PATH):
+        try:
+            with open(SESSION_STORAGE_PATH, "rb") as f:
+                storage = pickle.load(f)
+        except (OSError, EOFError, ValueError, pickle.UnpicklingError):
+            storage = {}
+
+    storage.setdefault("advancedmode", False)
+    modules = storage.setdefault("modules", {})
+    module = modules.setdefault(module_name, {"selected": "default", "sessions": {"default": {}}})
+    selected = module.setdefault("selected", "default")
+    session = module.setdefault("sessions", {}).setdefault(selected, {})
+    session.setdefault("custom_data", {})[setting] = value
+    os.makedirs(os.path.dirname(SESSION_STORAGE_PATH), exist_ok=True)
+    with open(SESSION_STORAGE_PATH, "wb") as f:
+        pickle.dump(storage, f)
 
 
 class App(ctk.CTk):
@@ -736,6 +772,7 @@ class App(ctk.CTk):
 
         self._settings_data = load_settings()
         self._settings_vars = {}  # key_path -> tkinter variable
+        self._module_session_vars = {}
         row = [0]  # mutable counter
 
         def next_row():
@@ -893,6 +930,14 @@ class App(ctk.CTk):
                     entry = ctk.CTkEntry(scroll, textvariable=var,
                                         show="*" if "password" in key.lower() else "")
                     entry.grid(row=r, column=1, sticky="ew", padx=4, pady=2)
+                if module_name == "deezer":
+                    r = next_row()
+                    ctk.CTkLabel(scroll, text="  ARL", anchor="w").grid(
+                        row=r, column=0, sticky="w", padx=(16, 4), pady=2)
+                    arl_var = tkinter.StringVar(value=str(_read_module_session_value("deezer", "arl")))
+                    self._module_session_vars[(module_name, "arl")] = arl_var
+                    ctk.CTkEntry(scroll, textvariable=arl_var, show="*").grid(
+                        row=r, column=1, sticky="ew", padx=4, pady=2)
 
         # ── Save button ───────────────────────────────────────────────────────
         save_row = next_row()
@@ -953,6 +998,8 @@ class App(ctk.CTk):
                 self._nested_set(key_path, raw)
 
         save_settings(self._settings_data)
+        for (module_name, setting), var in self._module_session_vars.items():
+            _write_module_session_value(module_name, setting, var.get().strip())
         self._show_info("Settings saved.")
 
     def _show_error(self, message):

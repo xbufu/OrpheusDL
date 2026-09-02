@@ -1,3 +1,6 @@
 [submodule "modules/beatport"]
 	path = modules/beatport
 	url = https://github.com/Dniel97/orpheusdl-beatport.git
+[submodule "modules/deezer"]
+	path = modules/deezer
+	url = https://github.com/uhwot/orpheusdl-deezer.git

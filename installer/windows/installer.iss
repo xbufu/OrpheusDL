@@ -41,6 +41,7 @@ Name: "ffmpeg"; Description: "FFmpeg (required for codec conversions)"; Types: f
 Name: "modules"; Description: "Music Platform Modules"; Types: full custom
 Name: "modules\example"; Description: "Example support"; Types: full custom
 Name: "modules\beatport"; Description: "Beatport support"; Types: full custom
+Name: "modules\deezer"; Description: "Deezer support"; Types: full custom
 
 
 [Tasks]
@@ -55,6 +56,7 @@ Source: "{#RepoDir}\bin\ffprobe.exe"; DestDir: "{app}"; Components: ffmpeg; Flag
 
 Source: "{#RepoDir}\modules\example\*"; DestDir: "{app}\modules\example"; Components: modules\example; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\beatport\*"; DestDir: "{app}\modules\beatport"; Components: modules\beatport; Flags: recursesubdirs
+Source: "{#RepoDir}\modules\deezer\*"; DestDir: "{app}\modules\deezer"; Components: modules\deezer; Flags: recursesubdirs
 
 Source: "{#RepoDir}\modules\__init__.py"; DestDir: "{app}\modules"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
 

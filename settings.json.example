@@ -83,6 +83,13 @@
         "beatport": {
             "username": "user",
             "password": "pass"
+        },
+        "deezer": {
+            "client_id": "447462",
+            "client_secret": "a83bf7f38ad2f137e444727cfc3775cf",
+            "bf_secret": "",
+            "email": "",
+            "password": ""
         }
     }
 }
