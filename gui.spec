@@ -50,6 +50,7 @@ a = Analysis(
         'Cryptodome',
         'Cryptodome.Cipher',
         'Cryptodome.Cipher.AES',
+        'Cryptodome.Cipher.Blowfish',
         'google.protobuf',
     ],
     hookspath=[ROOT],
